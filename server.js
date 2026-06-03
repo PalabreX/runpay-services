@@ -29,7 +29,7 @@ app.get('/', (req, res) => {
   res.json({
     name: 'run.pay Services Bundle',
     version: '1.0.0',
-    services: ['web-scraper', 'pdf-generator', 'phone-validator', 'screenshot'],
+    services: ['web-scraper', 'web-scraper-batch', 'pdf-generator', 'phone-validator', 'phone-validator-batch', 'screenshot'],
     status: 'ok'
   });
 });
@@ -199,6 +199,151 @@ app.post('/screenshot', verifyRunPay, async (req, res) => {
   }
 });
  
+ 
+// ─── 5. PHONE VALIDATOR BATCH ─────────────────────────────────────────────────
+app.post('/phone-batch', verifyRunPay, async (req, res) => {
+  const { phones } = req.body;
+  if (!phones || !Array.isArray(phones)) return res.status(400).json({ error: 'phones array required' });
+  if (phones.length > 1000) return res.status(400).json({ error: 'Maximum 1000 numbers per batch' });
+  if (phones.length === 0) return res.status(400).json({ error: 'phones array is empty' });
+ 
+  const prefixes = {
+    '+33':{ country:'France', code:'FR' },
+    '+1': { country:'USA/Canada', code:'US' },
+    '+44':{ country:'United Kingdom', code:'GB' },
+    '+49':{ country:'Germany', code:'DE' },
+    '+34':{ country:'Spain', code:'ES' },
+    '+39':{ country:'Italy', code:'IT' },
+    '+32':{ country:'Belgium', code:'BE' },
+    '+41':{ country:'Switzerland', code:'CH' },
+    '+31':{ country:'Netherlands', code:'NL' },
+    '+212':{ country:'Morocco', code:'MA' },
+    '+213':{ country:'Algeria', code:'DZ' },
+    '+216':{ country:'Tunisia', code:'TN' },
+    '+971':{ country:'UAE', code:'AE' },
+    '+966':{ country:'Saudi Arabia', code:'SA' },
+    '+91': { country:'India', code:'IN' },
+    '+86': { country:'China', code:'CN' },
+    '+81': { country:'Japan', code:'JP' },
+    '+55': { country:'Brazil', code:'BR' },
+    '+52': { country:'Mexico', code:'MX' },
+  };
+ 
+  function validatePhone(phone) {
+    const cleaned = String(phone).replace(/[\s\-\.\(\)]/g, '');
+    let detected = null, prefix = null;
+    for (const [p, info] of Object.entries(prefixes)) {
+      if (cleaned.startsWith(p)) { detected = info; prefix = p; break; }
+    }
+    let lineType = 'unknown';
+    if (detected?.code === 'FR') {
+      const local = cleaned.replace('+33', '0');
+      if (local.startsWith('06') || local.startsWith('07')) lineType = 'mobile';
+      else if (/^0[1-5]/.test(local)) lineType = 'landline';
+      else if (local.startsWith('08')) lineType = 'special';
+    } else if (detected?.code === 'US') {
+      lineType = 'mobile/landline';
+    }
+    const isValid = cleaned.length >= 8 && cleaned.length <= 15 && /^\+?[0-9]+$/.test(cleaned);
+    const e164 = cleaned.startsWith('+') ? cleaned : '+' + cleaned;
+    return {
+      input: phone,
+      e164,
+      is_valid: isValid,
+      country: detected?.country || 'Unknown',
+      country_code: detected?.code || 'XX',
+      country_prefix: prefix || 'unknown',
+      line_type: lineType,
+      digits: cleaned.replace('+', '').length
+    };
+  }
+ 
+  const results = phones.map(validatePhone);
+  const valid = results.filter(r => r.is_valid).length;
+  const invalid = results.filter(r => !r.is_valid).length;
+  const byCountry = {};
+  results.forEach(r => { byCountry[r.country] = (byCountry[r.country] || 0) + 1; });
+ 
+  res.json({
+    success: true,
+    total: phones.length,
+    valid,
+    invalid,
+    by_country: byCountry,
+    results,
+    processed_at: new Date().toISOString()
+  });
+});
+ 
+// ─── 6. WEB SCRAPER BATCH ─────────────────────────────────────────────────────
+app.post('/scrape-batch', verifyRunPay, async (req, res) => {
+  const { urls, extract = ['title', 'content', 'links'] } = req.body;
+  if (!urls || !Array.isArray(urls)) return res.status(400).json({ error: 'urls array required' });
+  if (urls.length > 10) return res.status(400).json({ error: 'Maximum 10 URLs per batch' });
+  if (urls.length === 0) return res.status(400).json({ error: 'urls array is empty' });
+ 
+  async function scrapeOne(url) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+        },
+        signal: AbortSignal.timeout(12000)
+      });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const html = await response.text();
+ 
+      const result = { url, success: true };
+ 
+      if (extract.includes('title')) {
+        result.title = html.match(/<title[^>]*>(.*?)<\/title>/i)?.[1]?.trim() || '';
+      }
+      if (extract.includes('description')) {
+        result.description = html.match(/<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["']/i)?.[1] || '';
+      }
+      if (extract.includes('content')) {
+        result.content = html
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ').trim().substring(0, 5000);
+      }
+      if (extract.includes('links')) {
+        result.links = [...html.matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)]
+          .map(m => m[1]).filter((v, i, a) => a.indexOf(v) === i).slice(0, 15);
+      }
+      if (extract.includes('images')) {
+        result.images = [...html.matchAll(/src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi)]
+          .map(m => m[1]).slice(0, 5);
+      }
+      if (extract.includes('emails')) {
+        result.emails = [...new Set(html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g) || [])].slice(0, 10);
+      }
+ 
+      return result;
+    } catch (err) {
+      return { url, success: false, error: err.message };
+    }
+  }
+ 
+  // Scrape toutes les URLs en parallèle
+  const results = await Promise.all(urls.map(scrapeOne));
+  const successful = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+ 
+  res.json({
+    success: true,
+    total: urls.length,
+    successful,
+    failed,
+    results,
+    scraped_at: new Date().toISOString()
+  });
+});
+ 
 // ─── AUTO-PUBLISH SUR RUN.PAY ─────────────────────────────────────────────────
 async function publishServices() {
   if (!RUNPAY_KEY || !PUBLIC_URL) {
@@ -261,3 +406,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('run.pay Services Bundle v1.0 — Port ' + PORT + ' — Ready');
   console.log('Routes: /scrape /pdf /phone /screenshot');
 });
+ 

@@ -210,16 +210,12 @@ app.post('/pdf', verifyRunPay, (req, res) => {
   } else if (type === 'contract') {
     body = `
       ${data?.parties ? `<div class="meta">${data.parties.map(p=>`<div class="meta-item"><span class="meta-label">${p.role}</span><span class="meta-value">${p.name}</span></div>`).join('')}</div>` : ''}
-      ${content ? content.split('
- 
-').map(p => `<p>${p}</p>`).join('') : ''}
+      ${content ? content.split(String.fromCharCode(10)).map(p => '<p>'+p+'</p>').join('') : ''}
       ${data?.clauses ? data.clauses.map((c,i) => `<h3>${i+1}. ${c.title}</h3><p>${c.content}</p>`).join('') : ''}
       ${data?.signatures ? `<div style="margin-top:48px;display:flex;gap:48px">${data.signatures.map(s=>`<div style="flex:1;border-top:2px solid #333;padding-top:8px"><strong>${s.name}</strong><br><small>${s.role}</small><br><small>${s.date||'Date: ________________'}</small></div>`).join('')}</div>` : ''}
     `;
   } else {
-    body = content ? content.split('
- 
-').map(p => `<p>${p}</p>`).join('') : `<pre style="background:#f5f5f5;padding:16px;border-radius:4px;overflow-x:auto">${JSON.stringify(data || {}, null, 2)}</pre>`;
+    body = content ? content.split(String.fromCharCode(10)).map(p => '<p>'+p+'</p>').join('') : '<pre>'+JSON.stringify(data||{},null,2)+'</pre>';
   }
  
   const html = `<!DOCTYPE html>

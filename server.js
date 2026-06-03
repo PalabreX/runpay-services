@@ -187,10 +187,8 @@ app.post('/pdf', verifyRunPay, (req, res) => {
         <div class="meta-item"><span class="meta-label">Due Date</span><span class="meta-value">${data.due_date || 'Upon receipt'}</span></div>
         <div class="meta-item"><span class="meta-label">Status</span><span class="status status-${status}">${status.toUpperCase()}</span></div>
       </div>
-      ${data.from ? `<div style="margin-bottom:20px"><strong>From:</strong><br>${data.from.replace(/
-/g,'<br>')}</div>` : ''}
-      ${data.client ? `<div style="margin-bottom:28px"><strong>Bill To:</strong><br>${data.client.replace(/
-/g,'<br>')}</div>` : ''}
+      ${data.from ? `<div style="margin-bottom:20px"><strong>From:</strong><br>${data.from.split(String.fromCharCode(10)).join('<br>')}</div>` : ''}
+      ${data.client ? `<div style="margin-bottom:28px"><strong>Bill To:</strong><br>${data.client.split(String.fromCharCode(10)).join('<br>')}</div>` : ''}
       <table>
         <tr><th>Description</th><th style="text-align:center">Qty</th><th style="text-align:right">Unit Price</th><th style="text-align:right">Total</th></tr>
         ${items.map(i => `<tr><td>${i.description}${i.note?`<br><small style="color:#888">${i.note}</small>`:''}</td><td style="text-align:center">${i.qty||1}</td><td style="text-align:right">${(i.price||0).toFixed(2)}${currency}</td><td style="text-align:right">${((i.qty||1)*(i.price||0)).toFixed(2)}${currency}</td></tr>`).join('')}
@@ -199,8 +197,7 @@ app.post('/pdf', verifyRunPay, (req, res) => {
         <tr class="total-row"><td colspan="3" style="text-align:right">TOTAL</td><td style="text-align:right">${total.toFixed(2)}${currency}</td></tr>
       </table>
       ${data.notes ? `<div class="highlight"><strong>Notes:</strong><br>${data.notes}</div>` : ''}
-      ${data.payment_info ? `<div style="margin-top:20px"><strong>Payment Info:</strong><br>${data.payment_info.replace(/
-/g,'<br>')}</div>` : ''}
+      ${data.payment_info ? `<div style="margin-top:20px"><strong>Payment Info:</strong><br>${data.payment_info.split(String.fromCharCode(10)).join('<br>')}</div>` : ''}
     `;
   } else if (type === 'report') {
     const sections = data?.sections || [];
@@ -612,3 +609,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('run.pay Services Bundle v1.0 — Port ' + PORT + ' — Ready');
   console.log('Routes: /scrape /pdf /phone /screenshot');
 });
+ 

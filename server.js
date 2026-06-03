@@ -34,86 +34,219 @@ app.get('/', (req, res) => {
   });
 });
  
-// ─── 1. WEB SCRAPER ───────────────────────────────────────────────────────────
+// ─── 1. WEB SCRAPER PRO (optimisé) ───────────────────────────────────────────
 app.post('/scrape', verifyRunPay, async (req, res) => {
-  const { url } = req.body;
+  const { url, extract = ['title', 'description', 'content', 'links', 'images', 'emails', 'og'] } = req.body;
   if (!url) return res.status(400).json({ error: 'url required' });
+ 
+  const startTime = Date.now();
  
   try {
     const response = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9,fr;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'no-cache',
       },
       signal: AbortSignal.timeout(15000)
     });
  
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status} — ${response.statusText}`);
+    
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('text/html') && !contentType.includes('text/plain')) {
+      throw new Error(`Unsupported content type: ${contentType}`);
+    }
+ 
     const html = await response.text();
+    const result = { success: true, url, load_time_ms: Date.now() - startTime };
  
-    const title = html.match(/<title[^>]*>(.*?)<\/title>/i)?.[1]?.trim() || '';
-    const description = html.match(/<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["']/i)?.[1] || '';
-    const content = html
-      .replace(/<script[\s\S]*?<\/script>/gi, '')
-      .replace(/<style[\s\S]*?<\/style>/gi, '')
-      .replace(/<!--[\s\S]*?-->/g, '')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .substring(0, 8000);
+    // Titre
+    if (extract.includes('title')) {
+      result.title = html.match(/<title[^>]*>(.*?)<\/title>/i)?.[1]?.trim().replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>') || '';
+    }
  
-    const links = [...html.matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)]
-      .map(m => m[1]).filter((v, i, a) => a.indexOf(v) === i).slice(0, 20);
+    // Description
+    if (extract.includes('description')) {
+      result.description = html.match(/<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["']/i)?.[1] ||
+        html.match(/<meta[^>]*content=["'](.*?)["'][^>]*name=["']description["']/i)?.[1] || '';
+    }
  
-    const images = [...html.matchAll(/src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi)]
-      .map(m => m[1]).slice(0, 10);
+    // Open Graph metadata
+    if (extract.includes('og')) {
+      result.og = {
+        title: html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["'](.*?)["']/i)?.[1] || '',
+        description: html.match(/<meta[^>]*property=["']og:description["'][^>]*content=["'](.*?)["']/i)?.[1] || '',
+        image: html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["'](.*?)["']/i)?.[1] || '',
+        type: html.match(/<meta[^>]*property=["']og:type["'][^>]*content=["'](.*?)["']/i)?.[1] || '',
+      };
+    }
  
-    res.json({ success: true, url, title, description, content, links, images, scraped_at: new Date().toISOString() });
+    // Contenu texte nettoyé
+    if (extract.includes('content')) {
+      result.content = html
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+        .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+        .replace(/<header[\s\S]*?<\/header>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
+        .replace(/\s+/g, ' ').trim().substring(0, 10000);
+      result.word_count = result.content.split(/\s+/).length;
+    }
+ 
+    // Liens
+    if (extract.includes('links')) {
+      const allLinks = [...html.matchAll(/href=["'](https?:\/\/[^"'#?]+)["']/gi)].map(m => m[1]);
+      result.links = [...new Set(allLinks)].slice(0, 30);
+      result.internal_links = result.links.filter(l => l.includes(new URL(url).hostname)).slice(0, 15);
+      result.external_links = result.links.filter(l => !l.includes(new URL(url).hostname)).slice(0, 15);
+    }
+ 
+    // Images
+    if (extract.includes('images')) {
+      result.images = [...new Set([...html.matchAll(/src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|gif|webp|svg))["']/gi)].map(m => m[1]))].slice(0, 15);
+    }
+ 
+    // Emails
+    if (extract.includes('emails')) {
+      result.emails = [...new Set(html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g) || [])].filter(e => !e.includes('example') && !e.includes('test')).slice(0, 10);
+    }
+ 
+    // Numéros de téléphone
+    if (extract.includes('phones')) {
+      result.phones = [...new Set(html.match(/\+?[\d\s\-\.\(\)]{10,20}/g) || [])].filter(p => p.replace(/\D/g, '').length >= 9).slice(0, 10);
+    }
+ 
+    // Langue détectée
+    result.language = html.match(/<html[^>]*lang=["']([^"']+)["']/i)?.[1] || 'unknown';
+    result.scraped_at = new Date().toISOString();
+ 
+    res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message, url });
+    res.status(500).json({ success: false, error: err.message, url, load_time_ms: Date.now() - startTime });
   }
 });
  
-// ─── 2. PDF GENERATOR ─────────────────────────────────────────────────────────
+// ─── 2. PDF GENERATOR (optimisé) ──────────────────────────────────────────────
 app.post('/pdf', verifyRunPay, (req, res) => {
-  const { title, content, type = 'document', data } = req.body;
+  const { title, content, type = 'document', data, theme = 'default', language = 'en' } = req.body;
   if (!title && !content && !data) return res.status(400).json({ error: 'title or content required' });
  
+  const themes = {
+    default: { primary: '#1a1a2e', accent: '#00e87a', bg: '#ffffff', text: '#333333' },
+    dark:    { primary: '#ffffff', accent: '#00e87a', bg: '#1a1a2e', text: '#e8e8e8' },
+    blue:    { primary: '#1e40af', accent: '#3b82f6', bg: '#ffffff', text: '#1f2937' },
+    minimal: { primary: '#000000', accent: '#666666', bg: '#ffffff', text: '#333333' },
+  };
+  const t = themes[theme] || themes.default;
+  const currency = data?.currency || '€';
+  const dateLocale = language === 'fr' ? 'fr-FR' : 'en-US';
+ 
   const styles = `
-    body{font-family:Arial,sans-serif;margin:40px;color:#333;line-height:1.6}
-    h1{color:#1a1a2e;border-bottom:2px solid #00e87a;padding-bottom:10px}
-    h2{color:#16213e;margin-top:24px}
-    table{width:100%;border-collapse:collapse;margin-top:16px}
-    th{background:#f5f5f5;padding:10px;text-align:left;border:1px solid #ddd}
-    td{padding:10px;border:1px solid #ddd}
-    .footer{margin-top:40px;font-size:11px;color:#999;border-top:1px solid #eee;padding-top:10px}
-    .badge{background:#00e87a;color:#000;padding:3px 8px;border-radius:3px;font-size:11px}
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Helvetica Neue', Arial, sans-serif; padding: 48px; background: ${t.bg}; color: ${t.text}; line-height: 1.6; font-size: 14px; }
+    h1 { color: ${t.primary}; font-size: 28px; border-bottom: 3px solid ${t.accent}; padding-bottom: 12px; margin-bottom: 24px; }
+    h2 { color: ${t.primary}; font-size: 18px; margin: 28px 0 12px; }
+    h3 { color: ${t.primary}; font-size: 15px; margin: 20px 0 8px; }
+    p { margin-bottom: 12px; }
+    .meta { display: flex; justify-content: space-between; margin-bottom: 32px; background: ${t.primary}10; padding: 16px; border-radius: 4px; }
+    .meta-item { display: flex; flex-direction: column; gap: 4px; }
+    .meta-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: ${t.text}88; }
+    .meta-value { font-weight: 600; color: ${t.primary}; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+    th { background: ${t.primary}; color: ${t.bg}; padding: 12px 14px; text-align: left; font-size: 12px; letter-spacing: 0.5px; }
+    td { padding: 11px 14px; border-bottom: 1px solid ${t.text}22; }
+    tr:nth-child(even) td { background: ${t.primary}08; }
+    .total-row td { font-weight: 700; background: ${t.accent}22; font-size: 15px; }
+    .badge { background: ${t.accent}; color: #000; padding: 3px 10px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+    .highlight { background: ${t.accent}22; border-left: 4px solid ${t.accent}; padding: 12px 16px; margin: 16px 0; border-radius: 0 4px 4px 0; }
+    .footer { margin-top: 48px; padding-top: 14px; border-top: 1px solid ${t.text}22; font-size: 11px; color: ${t.text}66; display: flex; justify-content: space-between; }
+    .status { display: inline-block; padding: 4px 10px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+    .status-paid { background: #dcfce7; color: #166534; }
+    .status-pending { background: #fef9c3; color: #854d0e; }
   `;
  
   let body = '';
+ 
   if (type === 'invoice' && data) {
     const items = data.items || [];
-    const total = items.reduce((a, i) => a + (i.qty || 1) * (i.price || 0), 0);
+    const subtotal = items.reduce((a, i) => a + (i.qty || 1) * (i.price || 0), 0);
+    const tax = data.tax_rate ? subtotal * (data.tax_rate / 100) : 0;
+    const total = subtotal + tax;
+    const status = data.status || 'pending';
+ 
     body = `
-      <p><strong>Invoice #:</strong> ${data.invoice_number || 'INV-001'}</p>
-      <p><strong>Date:</strong> ${data.date || new Date().toLocaleDateString()}</p>
-      <p><strong>Client:</strong> ${data.client || ''}</p>
-      <table><tr><th>Description</th><th>Qty</th><th>Price</th><th>Total</th></tr>
-      ${items.map(i => `<tr><td>${i.description}</td><td>${i.qty||1}</td><td>${i.price||0}€</td><td>${(i.qty||1)*(i.price||0)}€</td></tr>`).join('')}
-      </table><p style="text-align:right;margin-top:12px"><strong>Total: ${total}€</strong></p>
+      <div class="meta">
+        <div class="meta-item"><span class="meta-label">Invoice</span><span class="meta-value">${data.invoice_number || 'INV-001'}</span></div>
+        <div class="meta-item"><span class="meta-label">Date</span><span class="meta-value">${data.date || new Date().toLocaleDateString(dateLocale)}</span></div>
+        <div class="meta-item"><span class="meta-label">Due Date</span><span class="meta-value">${data.due_date || 'Upon receipt'}</span></div>
+        <div class="meta-item"><span class="meta-label">Status</span><span class="status status-${status}">${status.toUpperCase()}</span></div>
+      </div>
+      ${data.from ? `<div style="margin-bottom:20px"><strong>From:</strong><br>${data.from.replace(/
+/g,'<br>')}</div>` : ''}
+      ${data.client ? `<div style="margin-bottom:28px"><strong>Bill To:</strong><br>${data.client.replace(/
+/g,'<br>')}</div>` : ''}
+      <table>
+        <tr><th>Description</th><th style="text-align:center">Qty</th><th style="text-align:right">Unit Price</th><th style="text-align:right">Total</th></tr>
+        ${items.map(i => `<tr><td>${i.description}${i.note?`<br><small style="color:#888">${i.note}</small>`:''}</td><td style="text-align:center">${i.qty||1}</td><td style="text-align:right">${(i.price||0).toFixed(2)}${currency}</td><td style="text-align:right">${((i.qty||1)*(i.price||0)).toFixed(2)}${currency}</td></tr>`).join('')}
+        <tr><td colspan="3" style="text-align:right;padding-top:8px">Subtotal</td><td style="text-align:right;padding-top:8px">${subtotal.toFixed(2)}${currency}</td></tr>
+        ${tax > 0 ? `<tr><td colspan="3" style="text-align:right">Tax (${data.tax_rate}%)</td><td style="text-align:right">${tax.toFixed(2)}${currency}</td></tr>` : ''}
+        <tr class="total-row"><td colspan="3" style="text-align:right">TOTAL</td><td style="text-align:right">${total.toFixed(2)}${currency}</td></tr>
+      </table>
+      ${data.notes ? `<div class="highlight"><strong>Notes:</strong><br>${data.notes}</div>` : ''}
+      ${data.payment_info ? `<div style="margin-top:20px"><strong>Payment Info:</strong><br>${data.payment_info.replace(/
+/g,'<br>')}</div>` : ''}
     `;
-  } else if (type === 'report' && data?.sections) {
-    body = data.sections.map(s => `<h2>${s.title}</h2><p>${s.content}</p>`).join('');
+  } else if (type === 'report') {
+    const sections = data?.sections || [];
+    body = `
+      ${data?.summary ? `<div class="highlight">${data.summary}</div>` : ''}
+      ${data?.stats ? `<div class="meta">${Object.entries(data.stats).map(([k,v]) => `<div class="meta-item"><span class="meta-label">${k}</span><span class="meta-value">${v}</span></div>`).join('')}</div>` : ''}
+      ${sections.map(s => `<h2>${s.title}</h2>${s.highlight ? `<div class="highlight">${s.highlight}</div>` : ''}<p>${s.content}</p>${s.items ? `<ul style="margin:8px 0 12px 20px">${s.items.map(i=>`<li>${i}</li>`).join('')}</ul>` : ''}`).join('')}
+      ${content ? `<p>${content}</p>` : ''}
+    `;
+  } else if (type === 'contract') {
+    body = `
+      ${data?.parties ? `<div class="meta">${data.parties.map(p=>`<div class="meta-item"><span class="meta-label">${p.role}</span><span class="meta-value">${p.name}</span></div>`).join('')}</div>` : ''}
+      ${content ? content.split('
+ 
+').map(p => `<p>${p}</p>`).join('') : ''}
+      ${data?.clauses ? data.clauses.map((c,i) => `<h3>${i+1}. ${c.title}</h3><p>${c.content}</p>`).join('') : ''}
+      ${data?.signatures ? `<div style="margin-top:48px;display:flex;gap:48px">${data.signatures.map(s=>`<div style="flex:1;border-top:2px solid #333;padding-top:8px"><strong>${s.name}</strong><br><small>${s.role}</small><br><small>${s.date||'Date: ________________'}</small></div>`).join('')}</div>` : ''}
+    `;
   } else {
-    body = `<p>${content || JSON.stringify(data || {}, null, 2)}</p>`;
+    body = content ? content.split('
+ 
+').map(p => `<p>${p}</p>`).join('') : `<pre style="background:#f5f5f5;padding:16px;border-radius:4px;overflow-x:auto">${JSON.stringify(data || {}, null, 2)}</pre>`;
   }
  
-  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title||'Document'}</title><style>${styles}</style></head><body><h1>${title||'Document'}</h1>${body}<div class="footer">Generated by <span class="badge">run.pay</span> PDF Generator • ${new Date().toISOString()}</div></body></html>`;
+  const html = `<!DOCTYPE html>
+<html lang="${language}">
+<head>
+<meta charset="UTF-8">
+<title>${title || 'Document'}</title>
+<style>${styles}</style>
+</head>
+<body>
+<h1>${title || 'Document'}</h1>
+${body}
+<div class="footer">
+  <span>Generated by <span class="badge">run.pay</span> PDF Generator</span>
+  <span>${new Date().toLocaleDateString(dateLocale)} ${new Date().toLocaleTimeString(dateLocale)}</span>
+</div>
+</body>
+</html>`;
  
   res.json({
     success: true,
     title: title || 'Document',
+    type,
+    theme,
     html,
     html_base64: Buffer.from(html).toString('base64'),
     size_bytes: Buffer.byteLength(html),
@@ -121,81 +254,154 @@ app.post('/pdf', verifyRunPay, (req, res) => {
   });
 });
  
-// ─── 3. PHONE VALIDATOR ───────────────────────────────────────────────────────
+// ─── 3. PHONE VALIDATOR (optimisé) ───────────────────────────────────────────
 app.post('/phone', verifyRunPay, (req, res) => {
-  const { phone } = req.body;
+  const { phone, country_hint } = req.body;
   if (!phone) return res.status(400).json({ error: 'phone required' });
  
-  const cleaned = phone.replace(/[\s\-\.\(\)]/g, '');
+  const cleaned = String(phone).replace(/[\s\-\.\(\)]/g, '');
  
   const prefixes = {
-    '+33':{ country:'France', code:'FR' },
-    '+1': { country:'USA/Canada', code:'US' },
-    '+44':{ country:'United Kingdom', code:'GB' },
-    '+49':{ country:'Germany', code:'DE' },
-    '+34':{ country:'Spain', code:'ES' },
-    '+39':{ country:'Italy', code:'IT' },
-    '+32':{ country:'Belgium', code:'BE' },
-    '+41':{ country:'Switzerland', code:'CH' },
-    '+31':{ country:'Netherlands', code:'NL' },
-    '+212':{ country:'Morocco', code:'MA' },
-    '+213':{ country:'Algeria', code:'DZ' },
-    '+216':{ country:'Tunisia', code:'TN' },
-    '+971':{ country:'UAE', code:'AE' },
-    '+966':{ country:'Saudi Arabia', code:'SA' },
+    '+33': { country:'France', code:'FR', trunk:'0', mobile:['06','07'], landline:['01','02','03','04','05'], special:['08','09'] },
+    '+1':  { country:'USA/Canada', code:'US', trunk:'', mobile:[], landline:[], special:[] },
+    '+44': { country:'United Kingdom', code:'GB', trunk:'0', mobile:['07'], landline:['01','02','03'], special:['08','09'] },
+    '+49': { country:'Germany', code:'DE', trunk:'0', mobile:['015','016','017'], landline:[], special:[] },
+    '+34': { country:'Spain', code:'ES', trunk:'', mobile:['6','7'], landline:['9'], special:[] },
+    '+39': { country:'Italy', code:'IT', trunk:'', mobile:['3'], landline:['0'], special:['8'] },
+    '+32': { country:'Belgium', code:'BE', trunk:'0', mobile:['04'], landline:['0'], special:['08'] },
+    '+41': { country:'Switzerland', code:'CH', trunk:'0', mobile:['075','076','077','078','079'], landline:[], special:[] },
+    '+31': { country:'Netherlands', code:'NL', trunk:'0', mobile:['06'], landline:[], special:[] },
+    '+212': { country:'Morocco', code:'MA', trunk:'0', mobile:['06','07'], landline:['05'], special:[] },
+    '+213': { country:'Algeria', code:'DZ', trunk:'0', mobile:['05','06','07'], landline:[], special:[] },
+    '+216': { country:'Tunisia', code:'TN', trunk:'', mobile:['2','5','9'], landline:['7'], special:[] },
+    '+971': { country:'UAE', code:'AE', trunk:'0', mobile:['05'], landline:['04'], special:[] },
+    '+966': { country:'Saudi Arabia', code:'SA', trunk:'0', mobile:['05'], landline:[], special:[] },
+    '+91':  { country:'India', code:'IN', trunk:'0', mobile:[], landline:[], special:[] },
+    '+86':  { country:'China', code:'CN', trunk:'0', mobile:[], landline:[], special:[] },
+    '+81':  { country:'Japan', code:'JP', trunk:'0', mobile:['070','080','090'], landline:[], special:[] },
+    '+55':  { country:'Brazil', code:'BR', trunk:'0', mobile:[], landline:[], special:[] },
+    '+52':  { country:'Mexico', code:'MX', trunk:'0', mobile:[], landline:[], special:[] },
+    '+27':  { country:'South Africa', code:'ZA', trunk:'0', mobile:['06','07','08'], landline:[], special:[] },
+    '+20':  { country:'Egypt', code:'EG', trunk:'0', mobile:['010','011','012','015'], landline:[], special:[] },
+    '+7':   { country:'Russia', code:'RU', trunk:'8', mobile:['9'], landline:[], special:[] },
+    '+351': { country:'Portugal', code:'PT', trunk:'', mobile:['9'], landline:['2'], special:[] },
+    '+48':  { country:'Poland', code:'PL', trunk:'0', mobile:['5','6','7','8'], landline:[], special:[] },
+    '+30':  { country:'Greece', code:'GR', trunk:'', mobile:['69'], landline:['2'], special:[] },
+    '+90':  { country:'Turkey', code:'TR', trunk:'0', mobile:['05'], landline:[], special:[] },
   };
  
+  // Tri par longueur de préfixe pour éviter les conflits
   let detected = null, prefix = null;
-  for (const [p, info] of Object.entries(prefixes)) {
+  const sorted = Object.entries(prefixes).sort((a,b) => b[0].length - a[0].length);
+  for (const [p, info] of sorted) {
     if (cleaned.startsWith(p)) { detected = info; prefix = p; break; }
   }
  
+  // Détection type de ligne
   let lineType = 'unknown';
-  if (detected?.code === 'FR') {
-    const local = cleaned.replace('+33', '0');
-    if (local.startsWith('06') || local.startsWith('07')) lineType = 'mobile';
-    else if (/^0[1-5]/.test(local)) lineType = 'landline';
-    else if (local.startsWith('08')) lineType = 'special';
+  if (detected) {
+    const local = detected.trunk ? cleaned.replace(prefix, detected.trunk) : cleaned.replace(prefix, '');
+    if (detected.mobile.some(m => local.startsWith(m))) lineType = 'mobile';
+    else if (detected.landline.some(m => local.startsWith(m))) lineType = 'landline';
+    else if (detected.special.some(m => local.startsWith(m))) lineType = 'special/voip';
+    else lineType = 'unknown';
   }
  
-  const isValid = cleaned.length >= 8 && cleaned.length <= 15 && /^\+?[0-9]+$/.test(cleaned);
-  const e164 = cleaned.startsWith('+') ? cleaned : `+${cleaned}`;
+  const digits = cleaned.replace('+', '').replace(/\D/g,'').length;
+  const isValid = digits >= 7 && digits <= 15 && /^\+?[0-9]+$/.test(cleaned);
+  const e164 = cleaned.startsWith('+') ? cleaned : '+' + cleaned.replace(/\D/g,'');
+ 
+  // Format local
+  let localFormat = '';
+  if (detected?.code === 'FR') {
+    const local = '0' + cleaned.replace('+33', '');
+    localFormat = local.replace(/(\d{2})(?=\d)/g, '$1 ').trim();
+  } else if (detected?.code === 'US') {
+    const num = cleaned.replace('+1', '');
+    localFormat = num.replace(/(\d{3})(\d{3})(\d{4})/, '($1) $2-$3');
+  }
  
   res.json({
     success: true,
     input: phone,
     e164,
+    local_format: localFormat || e164,
     is_valid: isValid,
     country: detected?.country || 'Unknown',
     country_code: detected?.code || 'XX',
     country_prefix: prefix || 'unknown',
     line_type: lineType,
-    digits: cleaned.replace('+', '').length,
+    digits,
+    risk_level: lineType === 'special/voip' ? 'medium' : (isValid ? 'low' : 'high'),
     validated_at: new Date().toISOString()
   });
 });
  
-// ─── 4. SCREENSHOT API ────────────────────────────────────────────────────────
+// ─── 4. SCREENSHOT API (optimisé) ────────────────────────────────────────────
 app.post('/screenshot', verifyRunPay, async (req, res) => {
-  const { url, width = 1280, height = 800 } = req.body;
+  const { url, width = 1280, height = 800, mobile = false, format = 'png', full_page = false } = req.body;
   if (!url) return res.status(400).json({ error: 'url required' });
  
   try {
-    // Utilise l'API thum.io gratuite pour les screenshots
-    const screenshotUrl = `https://image.thum.io/get/width/${width}/crop/${height}/${url}`;
+    // Vérifie que l'URL est accessible
+    let siteAccessible = false;
+    let statusCode = null;
+    let responseTime = null;
+    
+    try {
+      const startTime = Date.now();
+      const check = await fetch(url, {
+        method: 'HEAD',
+        signal: AbortSignal.timeout(8000),
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; run.pay Screenshot Bot)' }
+      });
+      responseTime = Date.now() - startTime;
+      statusCode = check.status;
+      siteAccessible = check.ok;
+    } catch(e) {
+      siteAccessible = false;
+    }
+ 
+    // Génère les URLs de screenshot via thum.io (gratuit, fiable)
+    const deviceWidth = mobile ? 375 : width;
+    const deviceHeight = mobile ? 812 : height;
+    
+    const screenshotUrl = `https://image.thum.io/get/width/${deviceWidth}/crop/${deviceHeight}${full_page ? '/fullpage' : ''}/${url}`;
+    const thumbnailUrl = `https://image.thum.io/get/width/400/crop/300/${url}`;
     const ogImageUrl = `https://image.thum.io/get/og/${url}`;
+ 
+    // Extrait le domaine pour les infos
+    let domain = '';
+    try { domain = new URL(url).hostname; } catch(e) {}
  
     res.json({
       success: true,
       url,
+      domain,
       screenshot_url: screenshotUrl,
+      thumbnail_url: thumbnailUrl,
       og_image_url: ogImageUrl,
-      viewport: { width, height },
-      format: 'PNG',
+      viewport: { 
+        width: deviceWidth, 
+        height: deviceHeight, 
+        device: mobile ? 'mobile' : 'desktop',
+        full_page
+      },
+      format: format.toUpperCase(),
+      site_info: {
+        accessible: siteAccessible,
+        status_code: statusCode,
+        response_time_ms: responseTime
+      },
+      usage: {
+        embed: `<img src="${screenshotUrl}" alt="Screenshot of ${domain}" />`,
+        markdown: `![Screenshot of ${domain}](${screenshotUrl})`,
+        direct_url: screenshotUrl
+      },
       taken_at: new Date().toISOString()
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ success: false, error: err.message, url });
   }
 });
  
@@ -406,4 +612,3 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('run.pay Services Bundle v1.0 — Port ' + PORT + ' — Ready');
   console.log('Routes: /scrape /pdf /phone /screenshot');
 });
- 

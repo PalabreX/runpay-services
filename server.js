@@ -1,11 +1,11 @@
-
 /**
  * run.pay — Services Bundle
- * 4 vrais services fonctionnels :
+ * 5 vrais services fonctionnels :
  * 1. Web Scraper Pro
  * 2. PDF Generator
  * 3. Phone Validator
  * 4. Screenshot API
+ * 5. Domain Enrichment
  */
  
 import express from 'express';
@@ -28,8 +28,8 @@ function verifyRunPay(req, res, next) {
 app.get('/', (req, res) => {
   res.json({
     name: 'run.pay Services Bundle',
-    version: '1.0.0',
-    services: ['web-scraper', 'web-scraper-batch', 'pdf-generator', 'phone-validator', 'phone-validator-batch', 'screenshot'],
+    version: '1.1.0',
+    services: ['web-scraper', 'web-scraper-batch', 'pdf-generator', 'phone-validator', 'phone-validator-batch', 'screenshot', 'enrich'],
     status: 'ok'
   });
 });
@@ -63,18 +63,15 @@ app.post('/scrape', verifyRunPay, async (req, res) => {
     const html = await response.text();
     const result = { success: true, url, load_time_ms: Date.now() - startTime };
  
-    // Titre
     if (extract.includes('title')) {
       result.title = html.match(/<title[^>]*>(.*?)<\/title>/i)?.[1]?.trim().replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>') || '';
     }
  
-    // Description
     if (extract.includes('description')) {
       result.description = html.match(/<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["']/i)?.[1] ||
         html.match(/<meta[^>]*content=["'](.*?)["'][^>]*name=["']description["']/i)?.[1] || '';
     }
  
-    // Open Graph metadata
     if (extract.includes('og')) {
       result.og = {
         title: html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["'](.*?)["']/i)?.[1] || '',
@@ -84,7 +81,6 @@ app.post('/scrape', verifyRunPay, async (req, res) => {
       };
     }
  
-    // Contenu texte nettoyé
     if (extract.includes('content')) {
       result.content = html
         .replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -99,7 +95,6 @@ app.post('/scrape', verifyRunPay, async (req, res) => {
       result.word_count = result.content.split(/\s+/).length;
     }
  
-    // Liens
     if (extract.includes('links')) {
       const allLinks = [...html.matchAll(/href=["'](https?:\/\/[^"'#?]+)["']/gi)].map(m => m[1]);
       result.links = [...new Set(allLinks)].slice(0, 30);
@@ -107,22 +102,18 @@ app.post('/scrape', verifyRunPay, async (req, res) => {
       result.external_links = result.links.filter(l => !l.includes(new URL(url).hostname)).slice(0, 15);
     }
  
-    // Images
     if (extract.includes('images')) {
       result.images = [...new Set([...html.matchAll(/src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|gif|webp|svg))["']/gi)].map(m => m[1]))].slice(0, 15);
     }
  
-    // Emails
     if (extract.includes('emails')) {
       result.emails = [...new Set(html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g) || [])].filter(e => !e.includes('example') && !e.includes('test')).slice(0, 10);
     }
  
-    // Numéros de téléphone
     if (extract.includes('phones')) {
       result.phones = [...new Set(html.match(/\+?[\d\s\-\.\(\)]{10,20}/g) || [])].filter(p => p.replace(/\D/g, '').length >= 9).slice(0, 10);
     }
  
-    // Langue détectée
     result.language = html.match(/<html[^>]*lang=["']([^"']+)["']/i)?.[1] || 'unknown';
     result.scraped_at = new Date().toISOString();
  
@@ -283,14 +274,12 @@ app.post('/phone', verifyRunPay, (req, res) => {
     '+90':  { country:'Turkey', code:'TR', trunk:'0', mobile:['05'], landline:[], special:[] },
   };
  
-  // Tri par longueur de préfixe pour éviter les conflits
   let detected = null, prefix = null;
   const sorted = Object.entries(prefixes).sort((a,b) => b[0].length - a[0].length);
   for (const [p, info] of sorted) {
     if (cleaned.startsWith(p)) { detected = info; prefix = p; break; }
   }
  
-  // Détection type de ligne
   let lineType = 'unknown';
   if (detected) {
     const local = detected.trunk ? cleaned.replace(prefix, detected.trunk) : cleaned.replace(prefix, '');
@@ -304,7 +293,6 @@ app.post('/phone', verifyRunPay, (req, res) => {
   const isValid = digits >= 7 && digits <= 15 && /^\+?[0-9]+$/.test(cleaned);
   const e164 = cleaned.startsWith('+') ? cleaned : '+' + cleaned.replace(/\D/g,'');
  
-  // Format local
   let localFormat = '';
   if (detected?.code === 'FR') {
     const local = '0' + cleaned.replace('+33', '');
@@ -336,7 +324,6 @@ app.post('/screenshot', verifyRunPay, async (req, res) => {
   if (!url) return res.status(400).json({ error: 'url required' });
  
   try {
-    // Vérifie que l'URL est accessible
     let siteAccessible = false;
     let statusCode = null;
     let responseTime = null;
@@ -355,7 +342,6 @@ app.post('/screenshot', verifyRunPay, async (req, res) => {
       siteAccessible = false;
     }
  
-    // Génère les URLs de screenshot via thum.io (gratuit, fiable)
     const deviceWidth = mobile ? 375 : width;
     const deviceHeight = mobile ? 812 : height;
     
@@ -363,7 +349,6 @@ app.post('/screenshot', verifyRunPay, async (req, res) => {
     const thumbnailUrl = `https://image.thum.io/get/width/400/crop/300/${url}`;
     const ogImageUrl = `https://image.thum.io/get/og/${url}`;
  
-    // Extrait le domaine pour les infos
     let domain = '';
     try { domain = new URL(url).hostname; } catch(e) {}
  
@@ -528,7 +513,6 @@ app.post('/scrape-batch', verifyRunPay, async (req, res) => {
     }
   }
  
-  // Scrape toutes les URLs en parallèle
   const results = await Promise.all(urls.map(scrapeOne));
   const successful = results.filter(r => r.success).length;
   const failed = results.filter(r => !r.success).length;
@@ -541,6 +525,98 @@ app.post('/scrape-batch', verifyRunPay, async (req, res) => {
     results,
     scraped_at: new Date().toISOString()
   });
+});
+ 
+// ─── 7. DOMAIN / COMPANY ENRICHMENT (nouveau) ─────────────────────────────────
+app.post('/enrich', verifyRunPay, async (req, res) => {
+  const { domain } = req.body;
+  if (!domain) return res.status(400).json({ error: 'domain required' });
+ 
+  let cleanDomain = String(domain).trim().toLowerCase();
+  cleanDomain = cleanDomain.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '');
+  const url = `https://${cleanDomain}`;
+ 
+  const startTime = Date.now();
+ 
+  try {
+    const response = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; run.pay enrichment bot)' },
+      signal: AbortSignal.timeout(8000)
+    });
+ 
+    const html = await response.text();
+    const headers = Object.fromEntries(response.headers.entries());
+    const responseTime = Date.now() - startTime;
+ 
+    const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    const title = titleMatch ? titleMatch[1].trim() : null;
+ 
+    const descMatch = html.match(/<meta\s+name=["']description["']\s+content=["']([^"']+)["']/i);
+    const description = descMatch ? descMatch[1].trim() : null;
+ 
+    const ogSiteMatch = html.match(/<meta\s+property=["']og:site_name["']\s+content=["']([^"']+)["']/i);
+    const companyName = ogSiteMatch ? ogSiteMatch[1].trim() : (title ? title.split(/[-|–]/)[0].trim() : null);
+ 
+    const socialPatterns = {
+      twitter: /(?:twitter\.com|x\.com)\/([a-zA-Z0-9_]+)/i,
+      linkedin: /linkedin\.com\/company\/([a-zA-Z0-9-]+)/i,
+      facebook: /facebook\.com\/([a-zA-Z0-9.]+)/i,
+      instagram: /instagram\.com\/([a-zA-Z0-9_.]+)/i,
+      github: /github\.com\/([a-zA-Z0-9-]+)/i
+    };
+ 
+    const socials = {};
+    for (const [platform, pattern] of Object.entries(socialPatterns)) {
+      const match = html.match(pattern);
+      if (match) socials[platform] = match[0].startsWith('http') ? match[0] : `https://${match[0]}`;
+    }
+ 
+    const techSignatures = {
+      'React': /react|_next\/static|__NEXT_DATA__/i,
+      'Vue.js': /vue\.js|__vue__/i,
+      'WordPress': /wp-content|wp-includes/i,
+      'Shopify': /cdn\.shopify\.com|shopify/i,
+      'Webflow': /webflow\.com|wf-page/i,
+      'Squarespace': /squarespace\.com/i,
+      'HubSpot': /hubspot|hs-scripts/i,
+      'Google Analytics': /google-analytics\.com|gtag\(/i,
+      'Stripe': /js\.stripe\.com/i,
+      'Intercom': /widget\.intercom\.io/i,
+      'Cloudflare': /cloudflare/i
+    };
+ 
+    const technologies = [];
+    const fullText = html + JSON.stringify(headers);
+    for (const [tech, pattern] of Object.entries(techSignatures)) {
+      if (pattern.test(fullText)) technologies.push(tech);
+    }
+ 
+    const server = headers['server'] || null;
+ 
+    res.json({
+      success: true,
+      domain: cleanDomain,
+      company_name: companyName,
+      title: title,
+      description: description,
+      technologies: technologies,
+      server: server,
+      social_profiles: socials,
+      site_accessible: true,
+      status_code: response.status,
+      response_time_ms: responseTime,
+      enriched_at: new Date().toISOString()
+    });
+ 
+  } catch (error) {
+    res.json({
+      success: false,
+      domain: cleanDomain,
+      site_accessible: false,
+      error: error.message,
+      enriched_at: new Date().toISOString()
+    });
+  }
 });
  
 // ─── AUTO-PUBLISH SUR RUN.PAY ─────────────────────────────────────────────────
@@ -579,6 +655,13 @@ async function publishServices() {
       endpoint_url: `${PUBLIC_URL}/screenshot`,
       price_per_call: 0.015,
       category: 'MEDIA'
+    },
+    {
+      name: 'Domain Enrichment',
+      description: 'Enrich a domain with company name, description, tech stack detected, and linked social profiles. Real data scraped from the public site — no guesses.',
+      endpoint_url: `${PUBLIC_URL}/enrich`,
+      price_per_call: 0.60,
+      category: 'DATA'
     }
   ];
  
@@ -602,7 +685,7 @@ async function publishServices() {
 // ─── START ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log('run.pay Services Bundle v1.0 — Port ' + PORT + ' — Ready');
-  console.log('Routes: /scrape /pdf /phone /screenshot');
+  console.log('run.pay Services Bundle v1.1 — Port ' + PORT + ' — Ready');
+  console.log('Routes: /scrape /pdf /phone /screenshot /enrich');
 });
  

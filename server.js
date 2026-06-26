@@ -1,11 +1,17 @@
+ices server with batch · JS
 /**
  * run.pay — Services Bundle
- * 5 vrais services fonctionnels :
+ * 8 vrais services fonctionnels :
  * 1. Web Scraper Pro
- * 2. PDF Generator
- * 3. Phone Validator
- * 4. Screenshot API
- * 5. Domain Enrichment
+ * 2. Web Scraper Batch
+ * 3. PDF Generator
+ * 4. PDF Generator Batch
+ * 5. Phone Validator
+ * 6. Phone Validator Batch
+ * 7. Screenshot API
+ * 8. Screenshot Batch
+ * 9. Domain Enrichment
+ * 10. Domain Enrichment Batch
  */
  
 import express from 'express';
@@ -28,13 +34,17 @@ function verifyRunPay(req, res, next) {
 app.get('/', (req, res) => {
   res.json({
     name: 'run.pay Services Bundle',
-    version: '1.1.0',
-    services: ['web-scraper', 'web-scraper-batch', 'pdf-generator', 'phone-validator', 'phone-validator-batch', 'screenshot', 'enrich'],
+    version: '1.2.0',
+    services: [
+      'web-scraper', 'web-scraper-batch', 'pdf-generator', 'pdf-generator-batch',
+      'phone-validator', 'phone-validator-batch', 'screenshot', 'screenshot-batch',
+      'enrich', 'enrich-batch'
+    ],
     status: 'ok'
   });
 });
  
-// ─── 1. WEB SCRAPER PRO (optimisé) ───────────────────────────────────────────
+// ─── 1. WEB SCRAPER PRO ───────────────────────────────────────────────────────
 app.post('/scrape', verifyRunPay, async (req, res) => {
   const { url, extract = ['title', 'description', 'content', 'links', 'images', 'emails', 'og'] } = req.body;
   if (!url) return res.status(400).json({ error: 'url required' });
@@ -54,7 +64,7 @@ app.post('/scrape', verifyRunPay, async (req, res) => {
     });
  
     if (!response.ok) throw new Error(`HTTP ${response.status} — ${response.statusText}`);
-    
+ 
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('text/html') && !contentType.includes('text/plain')) {
       throw new Error(`Unsupported content type: ${contentType}`);
@@ -66,12 +76,10 @@ app.post('/scrape', verifyRunPay, async (req, res) => {
     if (extract.includes('title')) {
       result.title = html.match(/<title[^>]*>(.*?)<\/title>/i)?.[1]?.trim().replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>') || '';
     }
- 
     if (extract.includes('description')) {
       result.description = html.match(/<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["']/i)?.[1] ||
         html.match(/<meta[^>]*content=["'](.*?)["'][^>]*name=["']description["']/i)?.[1] || '';
     }
- 
     if (extract.includes('og')) {
       result.og = {
         title: html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["'](.*?)["']/i)?.[1] || '',
@@ -80,7 +88,6 @@ app.post('/scrape', verifyRunPay, async (req, res) => {
         type: html.match(/<meta[^>]*property=["']og:type["'][^>]*content=["'](.*?)["']/i)?.[1] || '',
       };
     }
- 
     if (extract.includes('content')) {
       result.content = html
         .replace(/<script[\s\S]*?<\/script>/gi, '')
@@ -94,22 +101,18 @@ app.post('/scrape', verifyRunPay, async (req, res) => {
         .replace(/\s+/g, ' ').trim().substring(0, 10000);
       result.word_count = result.content.split(/\s+/).length;
     }
- 
     if (extract.includes('links')) {
       const allLinks = [...html.matchAll(/href=["'](https?:\/\/[^"'#?]+)["']/gi)].map(m => m[1]);
       result.links = [...new Set(allLinks)].slice(0, 30);
       result.internal_links = result.links.filter(l => l.includes(new URL(url).hostname)).slice(0, 15);
       result.external_links = result.links.filter(l => !l.includes(new URL(url).hostname)).slice(0, 15);
     }
- 
     if (extract.includes('images')) {
       result.images = [...new Set([...html.matchAll(/src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|gif|webp|svg))["']/gi)].map(m => m[1]))].slice(0, 15);
     }
- 
     if (extract.includes('emails')) {
       result.emails = [...new Set(html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g) || [])].filter(e => !e.includes('example') && !e.includes('test')).slice(0, 10);
     }
- 
     if (extract.includes('phones')) {
       result.phones = [...new Set(html.match(/\+?[\d\s\-\.\(\)]{10,20}/g) || [])].filter(p => p.replace(/\D/g, '').length >= 9).slice(0, 10);
     }
@@ -123,11 +126,76 @@ app.post('/scrape', verifyRunPay, async (req, res) => {
   }
 });
  
-// ─── 2. PDF GENERATOR (optimisé) ──────────────────────────────────────────────
-app.post('/pdf', verifyRunPay, (req, res) => {
-  const { title, content, type = 'document', data, theme = 'default', language = 'en' } = req.body;
-  if (!title && !content && !data) return res.status(400).json({ error: 'title or content required' });
+// ─── 2. WEB SCRAPER BATCH ─────────────────────────────────────────────────────
+app.post('/scrape-batch', verifyRunPay, async (req, res) => {
+  const { urls, extract = ['title', 'content', 'links'] } = req.body;
+  if (!urls || !Array.isArray(urls)) return res.status(400).json({ error: 'urls array required' });
+  if (urls.length > 10) return res.status(400).json({ error: 'Maximum 10 URLs per batch' });
+  if (urls.length === 0) return res.status(400).json({ error: 'urls array is empty' });
  
+  async function scrapeOne(url) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.5',
+        },
+        signal: AbortSignal.timeout(12000)
+      });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const html = await response.text();
+ 
+      const result = { url, success: true };
+ 
+      if (extract.includes('title')) {
+        result.title = html.match(/<title[^>]*>(.*?)<\/title>/i)?.[1]?.trim() || '';
+      }
+      if (extract.includes('description')) {
+        result.description = html.match(/<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["']/i)?.[1] || '';
+      }
+      if (extract.includes('content')) {
+        result.content = html
+          .replace(/<script[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[\s\S]*?<\/style>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ').trim().substring(0, 5000);
+      }
+      if (extract.includes('links')) {
+        result.links = [...html.matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)]
+          .map(m => m[1]).filter((v, i, a) => a.indexOf(v) === i).slice(0, 15);
+      }
+      if (extract.includes('images')) {
+        result.images = [...html.matchAll(/src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi)]
+          .map(m => m[1]).slice(0, 5);
+      }
+      if (extract.includes('emails')) {
+        result.emails = [...new Set(html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g) || [])].slice(0, 10);
+      }
+ 
+      return result;
+    } catch (err) {
+      return { url, success: false, error: err.message };
+    }
+  }
+ 
+  const results = await Promise.all(urls.map(scrapeOne));
+  const successful = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+ 
+  res.json({
+    success: true,
+    total: urls.length,
+    successful,
+    failed,
+    results,
+    scraped_at: new Date().toISOString()
+  });
+});
+ 
+// ─── 3. PDF GENERATOR ─────────────────────────────────────────────────────────
+function buildPdfHtml({ title, content, type = 'document', data, theme = 'default', language = 'en' }) {
   const themes = {
     default: { primary: '#1a1a2e', accent: '#00e87a', bg: '#ffffff', text: '#333333' },
     dark:    { primary: '#ffffff', accent: '#00e87a', bg: '#1a1a2e', text: '#e8e8e8' },
@@ -209,7 +277,7 @@ app.post('/pdf', verifyRunPay, (req, res) => {
     body = content ? content.split(String.fromCharCode(10)).map(p => '<p>'+p+'</p>').join('') : '<pre>'+JSON.stringify(data||{},null,2)+'</pre>';
   }
  
-  const html = `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html lang="${language}">
 <head>
 <meta charset="UTF-8">
@@ -225,12 +293,19 @@ ${body}
 </div>
 </body>
 </html>`;
+}
+ 
+app.post('/pdf', verifyRunPay, (req, res) => {
+  const { title, content, type, data, theme, language } = req.body;
+  if (!title && !content && !data) return res.status(400).json({ error: 'title or content required' });
+ 
+  const html = buildPdfHtml({ title, content, type, data, theme, language });
  
   res.json({
     success: true,
     title: title || 'Document',
-    type,
-    theme,
+    type: type || 'document',
+    theme: theme || 'default',
     html,
     html_base64: Buffer.from(html).toString('base64'),
     size_bytes: Buffer.byteLength(html),
@@ -238,44 +313,79 @@ ${body}
   });
 });
  
-// ─── 3. PHONE VALIDATOR (optimisé) ───────────────────────────────────────────
-app.post('/phone', verifyRunPay, (req, res) => {
-  const { phone, country_hint } = req.body;
-  if (!phone) return res.status(400).json({ error: 'phone required' });
+// ─── 4. PDF GENERATOR BATCH (nouveau) ────────────────────────────────────────
+app.post('/pdf-batch', verifyRunPay, (req, res) => {
+  const { documents } = req.body;
+  if (!documents || !Array.isArray(documents)) return res.status(400).json({ error: 'documents array required' });
+  if (documents.length > 50) return res.status(400).json({ error: 'Maximum 50 documents per batch' });
+  if (documents.length === 0) return res.status(400).json({ error: 'documents array is empty' });
  
+  const results = documents.map((doc, idx) => {
+    try {
+      if (!doc.title && !doc.content && !doc.data) {
+        return { index: idx, success: false, error: 'title, content or data required' };
+      }
+      const html = buildPdfHtml(doc);
+      return {
+        index: idx,
+        success: true,
+        title: doc.title || 'Document',
+        type: doc.type || 'document',
+        html_base64: Buffer.from(html).toString('base64'),
+        size_bytes: Buffer.byteLength(html)
+      };
+    } catch (err) {
+      return { index: idx, success: false, error: err.message };
+    }
+  });
+ 
+  const successful = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+ 
+  res.json({
+    success: true,
+    total: documents.length,
+    successful,
+    failed,
+    results,
+    generated_at: new Date().toISOString()
+  });
+});
+ 
+// ─── 5. PHONE VALIDATOR ───────────────────────────────────────────────────────
+const PHONE_PREFIXES = {
+  '+33': { country:'France', code:'FR', trunk:'0', mobile:['06','07'], landline:['01','02','03','04','05'], special:['08','09'] },
+  '+1':  { country:'USA/Canada', code:'US', trunk:'', mobile:[], landline:[], special:[] },
+  '+44': { country:'United Kingdom', code:'GB', trunk:'0', mobile:['07'], landline:['01','02','03'], special:['08','09'] },
+  '+49': { country:'Germany', code:'DE', trunk:'0', mobile:['015','016','017'], landline:[], special:[] },
+  '+34': { country:'Spain', code:'ES', trunk:'', mobile:['6','7'], landline:['9'], special:[] },
+  '+39': { country:'Italy', code:'IT', trunk:'', mobile:['3'], landline:['0'], special:['8'] },
+  '+32': { country:'Belgium', code:'BE', trunk:'0', mobile:['04'], landline:['0'], special:['08'] },
+  '+41': { country:'Switzerland', code:'CH', trunk:'0', mobile:['075','076','077','078','079'], landline:[], special:[] },
+  '+31': { country:'Netherlands', code:'NL', trunk:'0', mobile:['06'], landline:[], special:[] },
+  '+212': { country:'Morocco', code:'MA', trunk:'0', mobile:['06','07'], landline:['05'], special:[] },
+  '+213': { country:'Algeria', code:'DZ', trunk:'0', mobile:['05','06','07'], landline:[], special:[] },
+  '+216': { country:'Tunisia', code:'TN', trunk:'', mobile:['2','5','9'], landline:['7'], special:[] },
+  '+971': { country:'UAE', code:'AE', trunk:'0', mobile:['05'], landline:['04'], special:[] },
+  '+966': { country:'Saudi Arabia', code:'SA', trunk:'0', mobile:['05'], landline:[], special:[] },
+  '+91':  { country:'India', code:'IN', trunk:'0', mobile:[], landline:[], special:[] },
+  '+86':  { country:'China', code:'CN', trunk:'0', mobile:[], landline:[], special:[] },
+  '+81':  { country:'Japan', code:'JP', trunk:'0', mobile:['070','080','090'], landline:[], special:[] },
+  '+55':  { country:'Brazil', code:'BR', trunk:'0', mobile:[], landline:[], special:[] },
+  '+52':  { country:'Mexico', code:'MX', trunk:'0', mobile:[], landline:[], special:[] },
+  '+27':  { country:'South Africa', code:'ZA', trunk:'0', mobile:['06','07','08'], landline:[], special:[] },
+  '+20':  { country:'Egypt', code:'EG', trunk:'0', mobile:['010','011','012','015'], landline:[], special:[] },
+  '+7':   { country:'Russia', code:'RU', trunk:'8', mobile:['9'], landline:[], special:[] },
+  '+351': { country:'Portugal', code:'PT', trunk:'', mobile:['9'], landline:['2'], special:[] },
+  '+48':  { country:'Poland', code:'PL', trunk:'0', mobile:['5','6','7','8'], landline:[], special:[] },
+  '+30':  { country:'Greece', code:'GR', trunk:'', mobile:['69'], landline:['2'], special:[] },
+  '+90':  { country:'Turkey', code:'TR', trunk:'0', mobile:['05'], landline:[], special:[] },
+};
+ 
+function validatePhoneFull(phone) {
   const cleaned = String(phone).replace(/[\s\-\.\(\)]/g, '');
- 
-  const prefixes = {
-    '+33': { country:'France', code:'FR', trunk:'0', mobile:['06','07'], landline:['01','02','03','04','05'], special:['08','09'] },
-    '+1':  { country:'USA/Canada', code:'US', trunk:'', mobile:[], landline:[], special:[] },
-    '+44': { country:'United Kingdom', code:'GB', trunk:'0', mobile:['07'], landline:['01','02','03'], special:['08','09'] },
-    '+49': { country:'Germany', code:'DE', trunk:'0', mobile:['015','016','017'], landline:[], special:[] },
-    '+34': { country:'Spain', code:'ES', trunk:'', mobile:['6','7'], landline:['9'], special:[] },
-    '+39': { country:'Italy', code:'IT', trunk:'', mobile:['3'], landline:['0'], special:['8'] },
-    '+32': { country:'Belgium', code:'BE', trunk:'0', mobile:['04'], landline:['0'], special:['08'] },
-    '+41': { country:'Switzerland', code:'CH', trunk:'0', mobile:['075','076','077','078','079'], landline:[], special:[] },
-    '+31': { country:'Netherlands', code:'NL', trunk:'0', mobile:['06'], landline:[], special:[] },
-    '+212': { country:'Morocco', code:'MA', trunk:'0', mobile:['06','07'], landline:['05'], special:[] },
-    '+213': { country:'Algeria', code:'DZ', trunk:'0', mobile:['05','06','07'], landline:[], special:[] },
-    '+216': { country:'Tunisia', code:'TN', trunk:'', mobile:['2','5','9'], landline:['7'], special:[] },
-    '+971': { country:'UAE', code:'AE', trunk:'0', mobile:['05'], landline:['04'], special:[] },
-    '+966': { country:'Saudi Arabia', code:'SA', trunk:'0', mobile:['05'], landline:[], special:[] },
-    '+91':  { country:'India', code:'IN', trunk:'0', mobile:[], landline:[], special:[] },
-    '+86':  { country:'China', code:'CN', trunk:'0', mobile:[], landline:[], special:[] },
-    '+81':  { country:'Japan', code:'JP', trunk:'0', mobile:['070','080','090'], landline:[], special:[] },
-    '+55':  { country:'Brazil', code:'BR', trunk:'0', mobile:[], landline:[], special:[] },
-    '+52':  { country:'Mexico', code:'MX', trunk:'0', mobile:[], landline:[], special:[] },
-    '+27':  { country:'South Africa', code:'ZA', trunk:'0', mobile:['06','07','08'], landline:[], special:[] },
-    '+20':  { country:'Egypt', code:'EG', trunk:'0', mobile:['010','011','012','015'], landline:[], special:[] },
-    '+7':   { country:'Russia', code:'RU', trunk:'8', mobile:['9'], landline:[], special:[] },
-    '+351': { country:'Portugal', code:'PT', trunk:'', mobile:['9'], landline:['2'], special:[] },
-    '+48':  { country:'Poland', code:'PL', trunk:'0', mobile:['5','6','7','8'], landline:[], special:[] },
-    '+30':  { country:'Greece', code:'GR', trunk:'', mobile:['69'], landline:['2'], special:[] },
-    '+90':  { country:'Turkey', code:'TR', trunk:'0', mobile:['05'], landline:[], special:[] },
-  };
- 
   let detected = null, prefix = null;
-  const sorted = Object.entries(prefixes).sort((a,b) => b[0].length - a[0].length);
+  const sorted = Object.entries(PHONE_PREFIXES).sort((a,b) => b[0].length - a[0].length);
   for (const [p, info] of sorted) {
     if (cleaned.startsWith(p)) { detected = info; prefix = p; break; }
   }
@@ -302,236 +412,118 @@ app.post('/phone', verifyRunPay, (req, res) => {
     localFormat = num.replace(/(\d{3})(\d{3})(\d{4})/, '($1) $2-$3');
   }
  
-  res.json({
-    success: true,
-    input: phone,
-    e164,
-    local_format: localFormat || e164,
-    is_valid: isValid,
-    country: detected?.country || 'Unknown',
-    country_code: detected?.code || 'XX',
-    country_prefix: prefix || 'unknown',
-    line_type: lineType,
-    digits,
-    risk_level: lineType === 'special/voip' ? 'medium' : (isValid ? 'low' : 'high'),
-    validated_at: new Date().toISOString()
-  });
+  return {
+    input: phone, e164, local_format: localFormat || e164, is_valid: isValid,
+    country: detected?.country || 'Unknown', country_code: detected?.code || 'XX',
+    country_prefix: prefix || 'unknown', line_type: lineType, digits,
+    risk_level: lineType === 'special/voip' ? 'medium' : (isValid ? 'low' : 'high')
+  };
+}
+ 
+app.post('/phone', verifyRunPay, (req, res) => {
+  const { phone } = req.body;
+  if (!phone) return res.status(400).json({ error: 'phone required' });
+  res.json({ success: true, ...validatePhoneFull(phone), validated_at: new Date().toISOString() });
 });
  
-// ─── 4. SCREENSHOT API (optimisé) ────────────────────────────────────────────
-app.post('/screenshot', verifyRunPay, async (req, res) => {
-  const { url, width = 1280, height = 800, mobile = false, format = 'png', full_page = false } = req.body;
-  if (!url) return res.status(400).json({ error: 'url required' });
- 
-  try {
-    let siteAccessible = false;
-    let statusCode = null;
-    let responseTime = null;
-    
-    try {
-      const startTime = Date.now();
-      const check = await fetch(url, {
-        method: 'HEAD',
-        signal: AbortSignal.timeout(8000),
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; run.pay Screenshot Bot)' }
-      });
-      responseTime = Date.now() - startTime;
-      statusCode = check.status;
-      siteAccessible = check.ok;
-    } catch(e) {
-      siteAccessible = false;
-    }
- 
-    const deviceWidth = mobile ? 375 : width;
-    const deviceHeight = mobile ? 812 : height;
-    
-    const screenshotUrl = `https://image.thum.io/get/width/${deviceWidth}/crop/${deviceHeight}${full_page ? '/fullpage' : ''}/${url}`;
-    const thumbnailUrl = `https://image.thum.io/get/width/400/crop/300/${url}`;
-    const ogImageUrl = `https://image.thum.io/get/og/${url}`;
- 
-    let domain = '';
-    try { domain = new URL(url).hostname; } catch(e) {}
- 
-    res.json({
-      success: true,
-      url,
-      domain,
-      screenshot_url: screenshotUrl,
-      thumbnail_url: thumbnailUrl,
-      og_image_url: ogImageUrl,
-      viewport: { 
-        width: deviceWidth, 
-        height: deviceHeight, 
-        device: mobile ? 'mobile' : 'desktop',
-        full_page
-      },
-      format: format.toUpperCase(),
-      site_info: {
-        accessible: siteAccessible,
-        status_code: statusCode,
-        response_time_ms: responseTime
-      },
-      usage: {
-        embed: `<img src="${screenshotUrl}" alt="Screenshot of ${domain}" />`,
-        markdown: `![Screenshot of ${domain}](${screenshotUrl})`,
-        direct_url: screenshotUrl
-      },
-      taken_at: new Date().toISOString()
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message, url });
-  }
-});
- 
- 
-// ─── 5. PHONE VALIDATOR BATCH ─────────────────────────────────────────────────
+// ─── 6. PHONE VALIDATOR BATCH ─────────────────────────────────────────────────
 app.post('/phone-batch', verifyRunPay, async (req, res) => {
   const { phones } = req.body;
   if (!phones || !Array.isArray(phones)) return res.status(400).json({ error: 'phones array required' });
   if (phones.length > 1000) return res.status(400).json({ error: 'Maximum 1000 numbers per batch' });
   if (phones.length === 0) return res.status(400).json({ error: 'phones array is empty' });
  
-  const prefixes = {
-    '+33':{ country:'France', code:'FR' },
-    '+1': { country:'USA/Canada', code:'US' },
-    '+44':{ country:'United Kingdom', code:'GB' },
-    '+49':{ country:'Germany', code:'DE' },
-    '+34':{ country:'Spain', code:'ES' },
-    '+39':{ country:'Italy', code:'IT' },
-    '+32':{ country:'Belgium', code:'BE' },
-    '+41':{ country:'Switzerland', code:'CH' },
-    '+31':{ country:'Netherlands', code:'NL' },
-    '+212':{ country:'Morocco', code:'MA' },
-    '+213':{ country:'Algeria', code:'DZ' },
-    '+216':{ country:'Tunisia', code:'TN' },
-    '+971':{ country:'UAE', code:'AE' },
-    '+966':{ country:'Saudi Arabia', code:'SA' },
-    '+91': { country:'India', code:'IN' },
-    '+86': { country:'China', code:'CN' },
-    '+81': { country:'Japan', code:'JP' },
-    '+55': { country:'Brazil', code:'BR' },
-    '+52': { country:'Mexico', code:'MX' },
-  };
- 
-  function validatePhone(phone) {
-    const cleaned = String(phone).replace(/[\s\-\.\(\)]/g, '');
-    let detected = null, prefix = null;
-    for (const [p, info] of Object.entries(prefixes)) {
-      if (cleaned.startsWith(p)) { detected = info; prefix = p; break; }
-    }
-    let lineType = 'unknown';
-    if (detected?.code === 'FR') {
-      const local = cleaned.replace('+33', '0');
-      if (local.startsWith('06') || local.startsWith('07')) lineType = 'mobile';
-      else if (/^0[1-5]/.test(local)) lineType = 'landline';
-      else if (local.startsWith('08')) lineType = 'special';
-    } else if (detected?.code === 'US') {
-      lineType = 'mobile/landline';
-    }
-    const isValid = cleaned.length >= 8 && cleaned.length <= 15 && /^\+?[0-9]+$/.test(cleaned);
-    const e164 = cleaned.startsWith('+') ? cleaned : '+' + cleaned;
-    return {
-      input: phone,
-      e164,
-      is_valid: isValid,
-      country: detected?.country || 'Unknown',
-      country_code: detected?.code || 'XX',
-      country_prefix: prefix || 'unknown',
-      line_type: lineType,
-      digits: cleaned.replace('+', '').length
-    };
-  }
- 
-  const results = phones.map(validatePhone);
+  const results = phones.map(validatePhoneFull);
   const valid = results.filter(r => r.is_valid).length;
   const invalid = results.filter(r => !r.is_valid).length;
   const byCountry = {};
   results.forEach(r => { byCountry[r.country] = (byCountry[r.country] || 0) + 1; });
  
   res.json({
-    success: true,
-    total: phones.length,
-    valid,
-    invalid,
-    by_country: byCountry,
-    results,
-    processed_at: new Date().toISOString()
+    success: true, total: phones.length, valid, invalid,
+    by_country: byCountry, results, processed_at: new Date().toISOString()
   });
 });
  
-// ─── 6. WEB SCRAPER BATCH ─────────────────────────────────────────────────────
-app.post('/scrape-batch', verifyRunPay, async (req, res) => {
-  const { urls, extract = ['title', 'content', 'links'] } = req.body;
-  if (!urls || !Array.isArray(urls)) return res.status(400).json({ error: 'urls array required' });
-  if (urls.length > 10) return res.status(400).json({ error: 'Maximum 10 URLs per batch' });
-  if (urls.length === 0) return res.status(400).json({ error: 'urls array is empty' });
+// ─── 7. SCREENSHOT API ────────────────────────────────────────────────────────
+async function takeScreenshotData(url, { width = 1280, height = 800, mobile = false, full_page = false } = {}) {
+  let siteAccessible = false, statusCode = null, responseTime = null;
  
-  async function scrapeOne(url) {
-    try {
-      const response = await fetch(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-        },
-        signal: AbortSignal.timeout(12000)
-      });
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      const html = await response.text();
- 
-      const result = { url, success: true };
- 
-      if (extract.includes('title')) {
-        result.title = html.match(/<title[^>]*>(.*?)<\/title>/i)?.[1]?.trim() || '';
-      }
-      if (extract.includes('description')) {
-        result.description = html.match(/<meta[^>]*name=["']description["'][^>]*content=["'](.*?)["']/i)?.[1] || '';
-      }
-      if (extract.includes('content')) {
-        result.content = html
-          .replace(/<script[\s\S]*?<\/script>/gi, '')
-          .replace(/<style[\s\S]*?<\/style>/gi, '')
-          .replace(/<!--[\s\S]*?-->/g, '')
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/\s+/g, ' ').trim().substring(0, 5000);
-      }
-      if (extract.includes('links')) {
-        result.links = [...html.matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)]
-          .map(m => m[1]).filter((v, i, a) => a.indexOf(v) === i).slice(0, 15);
-      }
-      if (extract.includes('images')) {
-        result.images = [...html.matchAll(/src=["'](https?:\/\/[^"']+\.(?:jpg|jpeg|png|gif|webp))["']/gi)]
-          .map(m => m[1]).slice(0, 5);
-      }
-      if (extract.includes('emails')) {
-        result.emails = [...new Set(html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g) || [])].slice(0, 10);
-      }
- 
-      return result;
-    } catch (err) {
-      return { url, success: false, error: err.message };
-    }
+  try {
+    const startTime = Date.now();
+    const check = await fetch(url, {
+      method: 'HEAD',
+      signal: AbortSignal.timeout(8000),
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; run.pay Screenshot Bot)' }
+    });
+    responseTime = Date.now() - startTime;
+    statusCode = check.status;
+    siteAccessible = check.ok;
+  } catch(e) {
+    siteAccessible = false;
   }
  
-  const results = await Promise.all(urls.map(scrapeOne));
+  const deviceWidth = mobile ? 375 : width;
+  const deviceHeight = mobile ? 812 : height;
+ 
+  const screenshotUrl = `https://image.thum.io/get/width/${deviceWidth}/crop/${deviceHeight}${full_page ? '/fullpage' : ''}/${url}`;
+  const thumbnailUrl = `https://image.thum.io/get/width/400/crop/300/${url}`;
+  const ogImageUrl = `https://image.thum.io/get/og/${url}`;
+ 
+  let domain = '';
+  try { domain = new URL(url).hostname; } catch(e) {}
+ 
+  return {
+    url, domain, screenshot_url: screenshotUrl, thumbnail_url: thumbnailUrl, og_image_url: ogImageUrl,
+    viewport: { width: deviceWidth, height: deviceHeight, device: mobile ? 'mobile' : 'desktop', full_page },
+    site_info: { accessible: siteAccessible, status_code: statusCode, response_time_ms: responseTime },
+    usage: {
+      embed: `<img src="${screenshotUrl}" alt="Screenshot of ${domain}" />`,
+      markdown: `![Screenshot of ${domain}](${screenshotUrl})`,
+      direct_url: screenshotUrl
+    }
+  };
+}
+ 
+app.post('/screenshot', verifyRunPay, async (req, res) => {
+  const { url, width, height, mobile, format = 'png', full_page } = req.body;
+  if (!url) return res.status(400).json({ error: 'url required' });
+ 
+  try {
+    const data = await takeScreenshotData(url, { width, height, mobile, full_page });
+    res.json({ success: true, ...data, format: format.toUpperCase(), taken_at: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message, url });
+  }
+});
+ 
+// ─── 8. SCREENSHOT BATCH (nouveau) ───────────────────────────────────────────
+app.post('/screenshot-batch', verifyRunPay, async (req, res) => {
+  const { urls, width, height, mobile, full_page } = req.body;
+  if (!urls || !Array.isArray(urls)) return res.status(400).json({ error: 'urls array required' });
+  if (urls.length > 30) return res.status(400).json({ error: 'Maximum 30 URLs per batch' });
+  if (urls.length === 0) return res.status(400).json({ error: 'urls array is empty' });
+ 
+  const results = await Promise.all(urls.map(async (url) => {
+    try {
+      const data = await takeScreenshotData(url, { width, height, mobile, full_page });
+      return { success: true, ...data };
+    } catch (err) {
+      return { success: false, url, error: err.message };
+    }
+  }));
+ 
   const successful = results.filter(r => r.success).length;
   const failed = results.filter(r => !r.success).length;
  
   res.json({
-    success: true,
-    total: urls.length,
-    successful,
-    failed,
-    results,
-    scraped_at: new Date().toISOString()
+    success: true, total: urls.length, successful, failed, results,
+    taken_at: new Date().toISOString()
   });
 });
  
-// ─── 7. DOMAIN / COMPANY ENRICHMENT (nouveau) ─────────────────────────────────
-app.post('/enrich', verifyRunPay, async (req, res) => {
-  const { domain } = req.body;
-  if (!domain) return res.status(400).json({ error: 'domain required' });
- 
+// ─── 9. DOMAIN / COMPANY ENRICHMENT ───────────────────────────────────────────
+async function enrichDomain(domain) {
   let cleanDomain = String(domain).trim().toLowerCase();
   cleanDomain = cleanDomain.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/$/, '');
   const url = `https://${cleanDomain}`;
@@ -575,7 +567,7 @@ app.post('/enrich', verifyRunPay, async (req, res) => {
       'React': /react|_next\/static|__NEXT_DATA__/i,
       'Vue.js': /vue\.js|__vue__/i,
       'WordPress': /wp-content|wp-includes/i,
-      'Shopify': /cdn\.shopify\.com|shopify/i,
+      'Shopify': /cdn\.shopify\.com/i,
       'Webflow': /webflow\.com|wf-page/i,
       'Squarespace': /squarespace\.com/i,
       'HubSpot': /hubspot|hs-scripts/i,
@@ -593,99 +585,44 @@ app.post('/enrich', verifyRunPay, async (req, res) => {
  
     const server = headers['server'] || null;
  
-    res.json({
-      success: true,
-      domain: cleanDomain,
-      company_name: companyName,
-      title: title,
-      description: description,
-      technologies: technologies,
-      server: server,
-      social_profiles: socials,
-      site_accessible: true,
-      status_code: response.status,
-      response_time_ms: responseTime,
-      enriched_at: new Date().toISOString()
-    });
- 
+    return {
+      success: true, domain: cleanDomain, company_name: companyName, title, description,
+      technologies, server, social_profiles: socials, site_accessible: true,
+      status_code: response.status, response_time_ms: responseTime
+    };
   } catch (error) {
-    res.json({
-      success: false,
-      domain: cleanDomain,
-      site_accessible: false,
-      error: error.message,
-      enriched_at: new Date().toISOString()
-    });
-  }
-});
- 
-// ─── AUTO-PUBLISH SUR RUN.PAY ─────────────────────────────────────────────────
-async function publishServices() {
-  if (!RUNPAY_KEY || !PUBLIC_URL) {
-    console.log('⚠️  RUNPAY_KEY ou PUBLIC_URL manquant — services non publiés automatiquement');
-    console.log('   Ajoute ces variables dans Railway et redéploie.');
-    return;
-  }
- 
-  const services = [
-    {
-      name: 'Web Scraper Pro',
-      description: 'Extract text, title, links and images from any public URL. Returns clean structured JSON.',
-      endpoint_url: `${PUBLIC_URL}/scrape`,
-      price_per_call: 0.005,
-      category: 'DATA'
-    },
-    {
-      name: 'PDF Generator',
-      description: 'Generate professional PDFs from JSON. Supports invoices, reports and custom documents. Returns HTML renderable as PDF.',
-      endpoint_url: `${PUBLIC_URL}/pdf`,
-      price_per_call: 0.008,
-      category: 'AI'
-    },
-    {
-      name: 'Phone Validator',
-      description: 'Validate phone numbers worldwide. Returns country, line type (mobile/landline) and E164 format.',
-      endpoint_url: `${PUBLIC_URL}/phone`,
-      price_per_call: 0.002,
-      category: 'DATA'
-    },
-    {
-      name: 'Screenshot API',
-      description: 'Capture any website as PNG. Custom viewport dimensions supported. Instant results.',
-      endpoint_url: `${PUBLIC_URL}/screenshot`,
-      price_per_call: 0.015,
-      category: 'MEDIA'
-    },
-    {
-      name: 'Domain Enrichment',
-      description: 'Enrich a domain with company name, description, tech stack detected, and linked social profiles. Real data scraped from the public site — no guesses.',
-      endpoint_url: `${PUBLIC_URL}/enrich`,
-      price_per_call: 0.60,
-      category: 'DATA'
-    }
-  ];
- 
-  console.log('📡 Publication des services sur run.pay...');
-  for (const service of services) {
-    try {
-      const res = await fetch(`${API_BASE}/api/services`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Api-Key': RUNPAY_KEY },
-        body: JSON.stringify(service)
-      });
-      const data = await res.json();
-      if (data.service_id) console.log(`✅ ${service.name} publié`);
-      else console.log(`⚠️  ${service.name}: ${data.error}`);
-    } catch (err) {
-      console.error(`❌ ${service.name}:`, err.message);
-    }
+    return { success: false, domain: cleanDomain, site_accessible: false, error: error.message };
   }
 }
+ 
+app.post('/enrich', verifyRunPay, async (req, res) => {
+  const { domain } = req.body;
+  if (!domain) return res.status(400).json({ error: 'domain required' });
+  const result = await enrichDomain(domain);
+  res.json({ ...result, enriched_at: new Date().toISOString() });
+});
+ 
+// ─── 10. DOMAIN ENRICHMENT BATCH (nouveau) ───────────────────────────────────
+app.post('/enrich-batch', verifyRunPay, async (req, res) => {
+  const { domains } = req.body;
+  if (!domains || !Array.isArray(domains)) return res.status(400).json({ error: 'domains array required' });
+  if (domains.length > 50) return res.status(400).json({ error: 'Maximum 50 domains per batch' });
+  if (domains.length === 0) return res.status(400).json({ error: 'domains array is empty' });
+ 
+  const results = await Promise.all(domains.map(enrichDomain));
+  const successful = results.filter(r => r.success).length;
+  const failed = results.filter(r => !r.success).length;
+ 
+  res.json({
+    success: true, total: domains.length, successful, failed, results,
+    enriched_at: new Date().toISOString()
+  });
+});
  
 // ─── START ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log('run.pay Services Bundle v1.1 — Port ' + PORT + ' — Ready');
-  console.log('Routes: /scrape /pdf /phone /screenshot /enrich');
+  console.log('run.pay Services Bundle v1.2 — Port ' + PORT + ' — Ready');
+  console.log('Routes: /scrape /scrape-batch /pdf /pdf-batch /phone /phone-batch /screenshot /screenshot-batch /enrich /enrich-batch');
 });
  

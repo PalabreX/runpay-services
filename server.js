@@ -1,4 +1,4 @@
-ices server with batch · JS
+
 /**
  * run.pay — Services Bundle
  * 8 vrais services fonctionnels :
